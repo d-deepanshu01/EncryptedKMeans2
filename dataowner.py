@@ -388,6 +388,16 @@ class WorkflowCompliantDataOwner:
                     continue
         
         self.attribute_names = numeric_columns
+        if len(self.attribute_names) > 0:
+            # Scale numeric columns to a range of [1, 10]
+            for col in self.attribute_names:
+                col_min = self.dataset[col].min()
+                col_max = self.dataset[col].max()
+                if col_min == col_max:
+                    # If the column has a constant value, assign 5.5
+                    self.dataset[col] = 5.5
+                else:
+                    self.dataset[col] = ((self.dataset[col] - col_min) / (col_max - col_min)) * 9 + 1
         self.keys = None
         
         print("\n--- Dataset Information ---")
