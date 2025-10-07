@@ -84,15 +84,15 @@ class PerformanceMonitor:
         }
 
 def homomorphic_add(e1: List[float], e2: List[float]) -> List[float]:
-    """Homomorphic addition: E + E' = v + v'"""
+    """Homomorphic addition"""
     return [e1[i] + e2[i] for i in range(len(e1))]
 
 def homomorphic_subtract(e1: List[float], e2: List[float]) -> List[float]:
-    """Homomorphic subtraction: E - E' = v - v'"""
+    """Homomorphic subtraction"""
     return [e1[i] - e2[i] for i in range(len(e1))]
 
 def homomorphic_scalar_multiply(c: float, e: List[float]) -> List[float]:
-    """Homomorphic scalar multiplication: c * E = c * v"""
+    """Homomorphic scalar multiplication"""
     return [c * val for val in e]
 
 def find_initial_centroids(num_records: int, k: int) -> List[int]:
@@ -119,29 +119,17 @@ def calculate_encrypted_distances_from_udm(point_idx: int,
                                           cluster_assignments: List[int],
                                           encrypted_udm: List[List[List[List[float]]]],
                                           k: int) -> List[List[List[float]]]:
-    """
-    CORRECTED: Calculate encrypted distances from point to each cluster centroid
-    using the UPDATED UDM which reflects current centroid positions
-    
-    For each cluster, sum squared differences across all attributes
-    Returns: [cluster_0_diffs, cluster_1_diffs, ...] where each is [attr_0, attr_1, ...]
-    """
+    """Calculate encrypted distances from point to each cluster centroid using UDM"""
     encrypted_distances = []
     
-    # For each cluster
     for cluster_id in range(k):
-        # Get all points in this cluster
         cluster_members = [i for i, c in enumerate(cluster_assignments) if c == cluster_id]
         
         if not cluster_members:
-            # Empty cluster - return dummy large distance
             encrypted_distances.append([])
             continue
         
-        # Use the first member as representative (UDM stores distances to representatives)
         representative = cluster_members[0]
-        
-        # Get encrypted differences: UDM[point_idx][representative][all_attributes]
         encrypted_diffs = encrypted_udm[point_idx][representative]
         encrypted_distances.append(encrypted_diffs)
     
@@ -149,7 +137,7 @@ def calculate_encrypted_distances_from_udm(point_idx: int,
 
 def calculate_cluster_sums(clusters: List[List[int]], 
                           encrypted_dataset: List[List[List[float]]]) -> Tuple[List[List[List[float]]], List[int]]:
-    """Calculate cluster sums homomorphically (not means)"""
+    """Calculate cluster sums homomorphically"""
     cluster_sums = []
     cluster_sizes = []
     
@@ -162,12 +150,10 @@ def calculate_cluster_sums(clusters: List[List[int]],
         cluster_size = len(cluster_members)
         num_attributes = len(encrypted_dataset[0])
         
-        # Initialize with first member
         cluster_sum = []
         for attr_idx in range(num_attributes):
             cluster_sum.append(encrypted_dataset[cluster_members[0]][attr_idx][:])
         
-        # Add remaining members homomorphically
         for member_idx in cluster_members[1:]:
             for attr_idx in range(num_attributes):
                 cluster_sum[attr_idx] = homomorphic_add(
@@ -190,15 +176,32 @@ class CorrectedThirdParty:
         self.client_socket = None
         self.attributes = None
         self.current_centroids = None
-        self.current_cluster_assignments = None  # Track current assignments for UDM update
+        self.current_cluster_assignments = None
         self.performance_monitor = PerformanceMonitor()
 
     def _send_json(self, sock, data):
-        """Send JSON data over socket with RTT measurement"""
+        """Send JSON data over socket with chunking for large payloads"""
         try:
             start_time = time.time()
             message = json.dumps(data, default=str).encode('utf-8')
-            sock.sendall(len(message).to_bytes(4, 'big') + message)
+            message_len = len(message)
+            
+            print(f"[THIRD PARTY] Sending {message_len} bytes ({message_len / (1024*1024):.2f} MB)")
+            
+            # Use 8 bytes for length
+            sock.sendall(message_len.to_bytes(8, 'big'))
+            
+            # Send in chunks
+            chunk_size = 1024 * 1024  # 1MB chunks
+            offset = 0
+            while offset < message_len:
+                chunk = message[offset:offset + chunk_size]
+                sock.sendall(chunk)
+                offset += chunk_size
+                if offset % (10 * 1024 * 1024) == 0:
+                    print(f"[THIRD PARTY] Sent {offset / (1024*1024):.2f} MB / {message_len / (1024*1024):.2f} MB")
+            
+            print(f"[THIRD PARTY] Successfully sent all data")
             
             rtt_time = time.time() - start_time
             operation_type = data.get('type', 'unknown')
@@ -209,25 +212,33 @@ class CorrectedThirdParty:
             raise
 
     def _receive_json(self, sock):
-        """Receive JSON data from socket with RTT measurement"""
+        """Receive JSON data from socket with support for large payloads"""
         try:
             start_time = time.time()
-            raw_len = sock.recv(4)
+            
+            # Use 8 bytes for length
+            raw_len = sock.recv(8)
             if not raw_len:
                 return None
             
             message_len = int.from_bytes(raw_len, 'big')
+            print(f"[THIRD PARTY] Receiving {message_len} bytes ({message_len / (1024*1024):.2f} MB)")
+            
             chunks = []
             bytes_recd = 0
             
             while bytes_recd < message_len:
-                chunk = sock.recv(min(message_len - bytes_recd, 4096))
+                chunk = sock.recv(min(message_len - bytes_recd, 1024 * 1024))
                 if not chunk:
                     raise RuntimeError("Socket connection broken")
                 chunks.append(chunk)
                 bytes_recd += len(chunk)
+                if bytes_recd % (10 * 1024 * 1024) == 0:
+                    print(f"[THIRD PARTY] Received {bytes_recd / (1024*1024):.2f} MB / {message_len / (1024*1024):.2f} MB")
             
+            print(f"[THIRD PARTY] Successfully received all data, parsing JSON...")
             data = json.loads(b''.join(chunks).decode('utf-8'))
+            print(f"[THIRD PARTY] JSON parsed successfully")
             
             rtt_time = time.time() - start_time
             operation_type = data.get('type', 'unknown')
@@ -239,13 +250,9 @@ class CorrectedThirdParty:
             return None
 
     def assign_records_to_clusters(self) -> List[List[int]]:
-        """
-        STEP 3: Assign records using encrypted UDM distances (requires data owner help)
-        Now uses UPDATED UDM that reflects current centroid positions
-        """
+        """Assign records using encrypted UDM distances"""
         print("[THIRD PARTY] Requesting cluster assignments from data owner...")
         
-        # Calculate encrypted distances for all points using UPDATED UDM
         all_encrypted_distances = []
         for record_idx in range(self.num_records):
             encrypted_distances = calculate_encrypted_distances_from_udm(
@@ -256,7 +263,6 @@ class CorrectedThirdParty:
             )
             all_encrypted_distances.append(encrypted_distances)
         
-        # Request data owner to decrypt and find minimums
         request = {
             'type': 'minimum_distance_request',
             'encrypted_distances': all_encrypted_distances
@@ -270,20 +276,18 @@ class CorrectedThirdParty:
         
         assignments = response['assignments']
         
-        # Convert assignments to cluster lists
         clusters = [[] for _ in range(self.k)]
         for record_idx, cluster_id in enumerate(assignments):
             if 0 <= cluster_id < self.k:
                 clusters[cluster_id].append(record_idx)
         
-        # Update current assignments
         self.current_cluster_assignments = assignments
         
         return clusters
 
     def request_centroid_means_from_owner(self, cluster_sums: List[List[List[float]]], 
                                         cluster_sizes: List[int]) -> List[List[List[float]]]:
-        """STEP 4: Request data owner to decrypt sums, compute means, re-encrypt"""
+        """Request data owner to decrypt sums, compute means, re-encrypt"""
         print("[THIRD PARTY] Requesting centroid mean calculation from data owner...")
         
         request = {
@@ -304,13 +308,9 @@ class CorrectedThirdParty:
                                            previous_centroids: List[List[List[float]]],
                                            clusters: List[List[int]], 
                                            iteration: int) -> Tuple[bool, float]:
-        """
-        CRITICAL FIX: STEP 5-6: Request shift matrix and UPDATE UDM
-        
-        Returns: (should_continue, shift_magnitude)
-        """
+        """Request shift matrix and UPDATE UDM"""
         try:
-            print("[THIRD PARTY] STEP 5: Requesting shift matrix from data owner...")
+            print("[THIRD PARTY] Requesting shift matrix from data owner...")
             
             request = {
                 'type': 'centroid_difference_request',
@@ -326,21 +326,17 @@ class CorrectedThirdParty:
                 print("[THIRD PARTY] Failed to receive shift matrix from data owner")
                 return False, 0.0
             
-            # Get PLAINTEXT shift matrix: S[cluster][attribute]
             shift_matrix = response['decrypted_shifts']
             
-            # Calculate shift magnitude for convergence check
             shift_magnitude = np.mean([abs(s) for centroid_shifts in shift_matrix 
                                      for s in centroid_shifts])
             
             print(f"[THIRD PARTY] Average centroid shift magnitude: {shift_magnitude:.6f}")
             
-            # STEP 6: UPDATE UDM using shift matrix
-            print(f"[THIRD PARTY] STEP 6: Updating UDM with shift matrix...")
+            print(f"[THIRD PARTY] Updating UDM with shift matrix...")
             self.update_udm_with_shift_matrix(shift_matrix, clusters)
             print(f"[THIRD PARTY] UDM updated successfully")
             
-            # Check convergence
             should_continue = shift_magnitude >= 0.01
             
             return should_continue, shift_magnitude
@@ -353,17 +349,9 @@ class CorrectedThirdParty:
 
     def update_udm_with_shift_matrix(self, shift_matrix: List[List[float]], 
                                      clusters: List[List[int]]):
-        """
-        CRITICAL FIX: Actually update the UDM using the plaintext shift matrix
+        """Actually update the UDM using the plaintext shift matrix"""
+        print(f"[THIRD PARTY] Updating UDM...")
         
-        Formula from paper:
-        UDM'[x][y][z] = UDM[x][y][z] + (S[cluster(x)][z] - S[cluster(y)][z])
-        
-        Where S is the PLAINTEXT shift matrix received from data owner
-        """
-        print(f"[THIRD PARTY] Updating UDM dimensions: {len(self.encrypted_udm)}x{len(self.encrypted_udm[0])}x{len(self.encrypted_udm[0][0])}")
-        
-        # Create cluster assignment lookup for efficiency
         point_to_cluster = {}
         for cluster_id, members in enumerate(clusters):
             for point_idx in members:
@@ -371,34 +359,19 @@ class CorrectedThirdParty:
         
         update_count = 0
         
-        # Update every entry in the UDM
         for x in range(self.num_records):
-            cluster_x = point_to_cluster.get(x, 0)  # Default to cluster 0 if not assigned
+            if x % 500 == 0:
+                print(f"[THIRD PARTY] Updating UDM row {x}/{self.num_records}")
+            
+            cluster_x = point_to_cluster.get(x, 0)
             
             for y in range(self.num_records):
                 cluster_y = point_to_cluster.get(y, 0)
                 
                 for z in range(self.num_attributes):
-                    # Calculate shift difference: S[cluster_x][z] - S[cluster_y][z]
                     shift_diff = shift_matrix[cluster_x][z] - shift_matrix[cluster_y][z]
                     
-                    # The shift is PLAINTEXT, so we need to add it to the encrypted UDM
-                    # In homomorphic encryption: Enc(a) + Enc(b) = Enc(a+b)
-                    # We need: UDM[x][y][z] + shift_diff
-                    
-                    # Create a "shift vector" by scaling the unit encrypted vector
-                    # This is a simplified approach - in practice, you'd need the encryption
-                    # to support plaintext addition or have the data owner send encrypted shifts
-                    
-                    # For now, we'll use scalar multiplication with the shift as plaintext
-                    # Note: This assumes the encryption scheme supports plaintext operations
-                    
-                    # Get current encrypted difference
                     current_encrypted = self.encrypted_udm[x][y][z]
-                    
-                    # Add the plaintext shift by creating an encrypted representation
-                    # In a real implementation, this would use the HE scheme's plaintext addition
-                    # For this code, we simulate by adding to each component
                     updated_encrypted = [val + shift_diff for val in current_encrypted]
                     
                     self.encrypted_udm[x][y][z] = updated_encrypted
@@ -407,7 +380,7 @@ class CorrectedThirdParty:
         print(f"[THIRD PARTY] UDM update complete: {update_count} entries updated")
 
     def start_client(self):
-        """Start corrected third party client with proper UDM updates"""
+        """Start corrected third party client"""
         self.performance_monitor.start_monitoring()
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         
@@ -416,7 +389,6 @@ class CorrectedThirdParty:
             self.client_socket.connect(('localhost', 12345))
             print("[THIRD PARTY] Connected to data owner")
             
-            # Receive initial encrypted data
             print("[THIRD PARTY] Waiting for encrypted data from data owner...")
             initial_data = self._receive_json(self.client_socket)
             
@@ -437,29 +409,25 @@ class CorrectedThirdParty:
             else:
                 raise Exception("Failed to receive initial data.")
             
-            # Initialize with random cluster assignments
             self.current_cluster_assignments = [random.randint(0, self.k-1) for _ in range(self.num_records)]
             
             previous_centroids = None
             iteration = 0
             
-            # Early stopping variables
             previous_assignments = None
             consecutive_same_assignments = 0
             
-            print(f"[THIRD PARTY] Starting k-means iterations with CORRECTED UDM update mechanism")
+            print(f"[THIRD PARTY] Starting k-means iterations")
             
             while iteration < 100:
                 iteration += 1
                 iteration_start = time.time()
                 print(f"\n[THIRD PARTY] === Iteration {iteration} ===")
                 
-                # STEP 3: Assignment using UPDATED encrypted UDM
                 clusters = self.assign_records_to_clusters()
                 
                 print(f"[THIRD PARTY] Cluster sizes: {[len(cluster) for cluster in clusters]}")
                 
-                # Early stopping: Check for stable cluster assignments
                 current_assignments = [sorted(cluster) for cluster in clusters]
                 
                 if previous_assignments is not None:
@@ -475,7 +443,6 @@ class CorrectedThirdParty:
                 
                 previous_assignments = [cluster[:] for cluster in current_assignments]
                 
-                # Handle empty clusters
                 for i, cluster in enumerate(clusters):
                     if not cluster:
                         print(f"[THIRD PARTY] WARNING: Empty cluster {i}, reassigning")
@@ -485,13 +452,11 @@ class CorrectedThirdParty:
                             point_to_move = clusters[largest_cluster_idx].pop()
                             clusters[i].append(point_to_move)
                 
-                # STEP 4: Calculate cluster sums and request means
                 cluster_sums, cluster_sizes = calculate_cluster_sums(clusters, self.encrypted_dataset)
                 new_centroids = self.request_centroid_means_from_owner(cluster_sums, cluster_sizes)
                 
                 print(f"[THIRD PARTY] Received re-encrypted centroids")
                 
-                # STEP 5-6: Calculate shifts and UPDATE UDM (if not first iteration)
                 if previous_centroids is not None:
                     should_continue, shift_mag = self.request_shift_matrix_and_update_udm(
                         new_centroids, previous_centroids, clusters, iteration
@@ -501,16 +466,13 @@ class CorrectedThirdParty:
                         print("[THIRD PARTY] Converged based on shift magnitude")
                         break
                 
-                # Update for next iteration
                 previous_centroids = new_centroids
                 self.current_centroids = new_centroids
                 
-                # Record iteration time
                 iteration_time = time.time() - iteration_start
                 self.performance_monitor.record_iteration_time(iteration, iteration_time)
                 print(f"[THIRD PARTY] Iteration {iteration} completed in {iteration_time:.3f}s")
             
-            # Send final results
             print(f"\n[THIRD PARTY] Clustering completed after {iteration} iterations")
             
             final_cluster_assignments = {str(i): cluster for i, cluster in enumerate(clusters)}
@@ -541,7 +503,6 @@ class CorrectedThirdParty:
             print(f"CPU Usage - Avg: {perf_stats['cpu_stats']['avg_cpu']:.2f}%, Max: {perf_stats['cpu_stats']['max_cpu']:.2f}%")
             print(f"Network RTT - Avg: {perf_stats['rtt_stats']['avg_rtt']*1000:.2f}ms, Max: {perf_stats['rtt_stats']['max_rtt']*1000:.2f}ms")
             
-            # Save performance data
             try:
                 if self.performance_monitor.rtt_measurements:
                     rtt_df = pd.DataFrame(self.performance_monitor.rtt_measurements)
