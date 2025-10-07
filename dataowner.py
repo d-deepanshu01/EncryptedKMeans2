@@ -86,22 +86,14 @@ class PerformanceMonitor:
         }
 
 def generate_liu_key(m: int) -> List[Tuple[float, float, float]]:
-    """
-    Generate a valid key for Liu's encryption scheme following paper's rules:
-    (i) ki ≠ 0 for 1 ≤ i ≤ m-1
-    (ii) km + sm + tm ≠ 0  
-    (iii) exactly one ti ≠ 0 (and it must be in positions 1 to m-1, NOT the last position)
-    """
+    """Generate a valid key for Liu's encryption scheme"""
     if m < 3:
         raise ValueError("m must be at least 3")
     
     keys = []
-    
-    # Choose which t will be non-zero (MUST be in first m-1 positions only)
     t_nonzero_index = random.randint(0, m-2)
     
     for i in range(m):
-        # Rule (i): ki ≠ 0 for i < m-1
         if i < m-1:
             k = random.uniform(0.5, 2.0)
         else:
@@ -109,7 +101,6 @@ def generate_liu_key(m: int) -> List[Tuple[float, float, float]]:
         
         s = random.uniform(-0.5, 0.5)
         
-        # Rule (iii): exactly one ti ≠ 0, and it must be in first m-1 positions ONLY
         if i == t_nonzero_index:
             t = random.uniform(0.8, 1.2)
         else:
@@ -117,7 +108,6 @@ def generate_liu_key(m: int) -> List[Tuple[float, float, float]]:
         
         keys.append((k, s, t))
     
-    # Rule (ii): ensure km + sm + tm ≠ 0
     last_k, last_s, last_t = keys[m-1]
     if abs(last_k + last_s + last_t) < 0.1:
         keys[m-1] = (last_k + 0.5, last_s, last_t)
@@ -128,7 +118,6 @@ def encrypt_value(v: float, keys: List[Tuple[float, float, float]]) -> List[floa
     """Liu's encryption implementation"""
     m = len(keys)
     
-    # Validate keys
     for i in range(m - 1):
         if abs(keys[i][0]) < 1e-10:
             raise ValueError(f"Key validation failed: k{i+1} is zero")
@@ -141,17 +130,14 @@ def encrypt_value(v: float, keys: List[Tuple[float, float, float]]) -> List[floa
     if non_zero_t_count != 1:
         raise ValueError(f"Key validation failed: {non_zero_t_count} non-zero t values (should be 1)")
     
-    # Generate random numbers
     r = [random.uniform(-0.1, 0.1) for _ in range(m)]
     
-    # Find the position with non-zero t
     t_nonzero_pos = -1
     for i in range(m-1):
         if abs(keys[i][2]) > 1e-10:
             t_nonzero_pos = i
             break
     
-    # Encryption formulas
     e = [0.0] * m
     
     for i in range(m-1):
@@ -161,7 +147,6 @@ def encrypt_value(v: float, keys: List[Tuple[float, float, float]]) -> List[floa
         else:
             e[i] = si * r[i]
     
-    # Last element
     km, sm, tm = keys[m-1]
     e[m-1] = (km + sm + tm) * r[m-1]
     
@@ -171,7 +156,6 @@ def decrypt_value(e: List[float], keys: List[Tuple[float, float, float]]) -> flo
     """Decryption algorithm"""
     m = len(keys)
     
-    # Find which position has the non-zero t
     t_nonzero_pos = -1
     T = 0.0
     for i in range(m-1):
@@ -183,7 +167,6 @@ def decrypt_value(e: List[float], keys: List[Tuple[float, float, float]]) -> flo
     if abs(T) < 1e-10:
         raise ValueError("No non-zero t found in keys")
     
-    # Extract rm from the last element
     km, sm, tm = keys[m-1]
     denominator = km + sm + tm
     
@@ -191,8 +174,6 @@ def decrypt_value(e: List[float], keys: List[Tuple[float, float, float]]) -> flo
         raise ValueError("Invalid key: km + sm + tm is zero")
     
     rm = e[m-1] / denominator
-    
-    # Extract the value from the element with non-zero t
     ki, si, ti = keys[t_nonzero_pos]
     
     ri_approx = rm
@@ -214,7 +195,7 @@ def homomorphic_scalar_multiply(c: float, e: List[float]) -> List[float]:
     return [c * val for val in e]
 
 def test_encryption_decryption(keys: List[Tuple[float, float, float]], test_values: List[float] = None):
-    """Test that encryption/decryption works correctly"""
+    """Test encryption/decryption"""
     if test_values is None:
         test_values = [1.0, -5.5, 42.7, 0.0, 25.0, 45.0, 30.0, 50.0, 60.0, 70.0]
     
@@ -223,7 +204,7 @@ def test_encryption_decryption(keys: List[Tuple[float, float, float]], test_valu
         print(f"  Key {i}: k={key[0]:.3f}, s={key[1]:.3f}, t={key[2]:.3f}")
     
     T = sum(keys[i][2] for i in range(len(keys)-1))
-    print(f"[DATA OWNER] T (sum of t values for positions 1 to m-1): {T}")
+    print(f"[DATA OWNER] T (sum of t values): {T}")
     
     if abs(T) < 1e-10:
         raise ValueError("T is zero - encryption scheme will not work")
@@ -254,10 +235,7 @@ def test_encryption_decryption(keys: List[Tuple[float, float, float]], test_valu
         return True
 
 def construct_encrypted_udm(processed_data: pd.DataFrame, keys: List[Tuple[float, float, float]]) -> List[List[List[List[float]]]]:
-    """
-    STEP 1: Construct UDM with encrypted differences
-    UDM[x][y][z] = Encrypt(X[x][z] - X[y][z])
-    """
+    """Construct UDM with encrypted differences"""
     print("[DATA OWNER] Constructing encrypted UDM...")
     num_records = len(processed_data)
     num_attributes = len(processed_data.columns)
@@ -265,6 +243,8 @@ def construct_encrypted_udm(processed_data: pd.DataFrame, keys: List[Tuple[float
     encrypted_udm = []
     
     for x in range(num_records):
+        if x % 500 == 0:
+            print(f"[DATA OWNER] Processing record {x}/{num_records}")
         udm_row = []
         for y in range(num_records):
             udm_col = []
@@ -279,14 +259,11 @@ def construct_encrypted_udm(processed_data: pd.DataFrame, keys: List[Tuple[float
     return encrypted_udm
 
 def outsource_data(D: pd.DataFrame, A: List[str], m: int) -> Tuple[List[List[List[float]]], List[List[List[List[float]]]], List[Tuple[float, float, float]]]:
-    """
-    Algorithm 3: Data encryption and encrypted UDM generation
-    """
+    """Data encryption and encrypted UDM generation"""
     print("--- Starting OutsourceData Procedure ---")
     
     processed_data = D.copy()
     
-    # Identify numeric columns
     numeric_columns = []
     for column in processed_data.columns:
         if processed_data[column].dtype in ['int64', 'float64']:
@@ -306,16 +283,13 @@ def outsource_data(D: pd.DataFrame, A: List[str], m: int) -> Tuple[List[List[Lis
     if len(processed_data.columns) == 0:
         raise ValueError("No numeric columns found in dataset!")
     
-    # Generate secret keys
     keys = generate_liu_key(m)
     print(f"[DATA OWNER] Generated keys with constraints satisfied")
     
-    # Test encryption/decryption
     test_success = test_encryption_decryption(keys)
     if not test_success:
         raise ValueError("Encryption/decryption test failed!")
     
-    # Encrypt dataset
     encrypted_data = []
     for _, row in processed_data.iterrows():
         encrypted_row = []
@@ -326,16 +300,13 @@ def outsource_data(D: pd.DataFrame, A: List[str], m: int) -> Tuple[List[List[Lis
     
     print(f"[DATA OWNER] Encrypted {len(encrypted_data)} records with {len(encrypted_data[0])} attributes each")
     
-    # Generate encrypted UDM
     encrypted_udm = construct_encrypted_udm(processed_data, keys)
     
     return encrypted_data, encrypted_udm, keys
 
 def decrypt_and_find_minimum_distances(encrypted_distances: List[List[List[float]]], 
                                      keys: List[Tuple[float, float, float]]) -> List[int]:
-    """
-    STEP 3: Data owner helps with minimum distance calculation
-    """
+    """Data owner helps with minimum distance calculation"""
     assignments = []
     
     for point_idx, point_distances in enumerate(encrypted_distances):
@@ -355,9 +326,7 @@ def decrypt_and_find_minimum_distances(encrypted_distances: List[List[List[float
 def decrypt_sums_compute_means_reencrypt(cluster_sums: List[List[List[float]]], 
                                        cluster_sizes: List[int],
                                        keys: List[Tuple[float, float, float]]) -> List[List[List[float]]]:
-    """
-    STEP 4: Data owner decrypts sums, computes means, re-encrypts
-    """
+    """Data owner decrypts sums, computes means, re-encrypts"""
     encrypted_centroids = []
     
     for i, (sums, size) in enumerate(zip(cluster_sums, cluster_sizes)):
@@ -377,9 +346,7 @@ def decrypt_sums_compute_means_reencrypt(cluster_sums: List[List[List[float]]],
 
 def calculate_centroid_difference(current_centroids: List[List[List[float]]], 
                                 previous_centroids: List[List[List[float]]]) -> List[List[List[float]]]:
-    """
-    STEP 4: Calculate shift matrix S = Cent - Cent0
-    """
+    """Calculate shift matrix S = Cent - Cent0"""
     shift_matrix = []
     for i in range(len(current_centroids)):
         cluster_shift = []
@@ -392,9 +359,7 @@ def calculate_centroid_difference(current_centroids: List[List[List[float]]],
 
 def decrypt_shift_matrix(encrypted_shift_matrix: List[List[List[float]]], 
                         keys: List[Tuple[float, float, float]]) -> List[List[float]]:
-    """
-    STEP 5: Decrypt the shift matrix to get plaintext shifts
-    """
+    """Decrypt the shift matrix"""
     decrypted_shifts = []
     for cluster_shifts in encrypted_shift_matrix:
         cluster_decrypted = []
@@ -408,7 +373,7 @@ def decrypt_shift_matrix(encrypted_shift_matrix: List[List[List[float]]],
 def save_results_to_csv(original_dataset: pd.DataFrame, cluster_assignments: Dict[str, List[int]], 
                        final_centroids: List[Dict[str, float]], performance_stats: Dict,
                        output_filename: str = "clustering_results.csv"):
-    """Save clustering results and performance metrics to CSV files"""
+    """Save clustering results"""
     try:
         results_df = original_dataset.copy()
         
@@ -449,7 +414,7 @@ def save_results_to_csv(original_dataset: pd.DataFrame, cluster_assignments: Dic
         print(f"[DATA OWNER] Error saving results: {e}")
 
 def plot_clusters(data, labels, centroids, iteration, attribute_names, save_path=None):
-    """Plot clusters using PCA for dimensionality reduction if needed"""
+    """Plot clusters using PCA"""
     try:
         if isinstance(data, pd.DataFrame):
             data_array = data.values
@@ -528,16 +493,15 @@ PORT = 12345
 
 class EnhancedDataOwner:
     def __init__(self, dataset_path: str):
-        """Initialize the Data Owner by loading a dataset"""
+        """Initialize the Data Owner"""
         try:
             self.original_dataset = pd.read_csv(dataset_path)
             self.dataset = self.original_dataset.copy()
         except FileNotFoundError:
-            raise FileNotFoundError(f"Dataset not found at '{dataset_path}'. Please provide a valid path.")
+            raise FileNotFoundError(f"Dataset not found at '{dataset_path}'")
         except Exception as e:
             raise ValueError(f"Error loading dataset: {e}")
         
-        # Only include numeric columns
         self.all_columns = list(self.dataset.columns)
         numeric_columns = []
         self.scale_info = {}
@@ -554,7 +518,6 @@ class EnhancedDataOwner:
         
         self.attribute_names = numeric_columns
         if len(self.attribute_names) > 0:
-            # Scale numeric columns to [1, 10] for better encryption stability
             for col in self.attribute_names:
                 col_min = self.dataset[col].min()
                 col_max = self.dataset[col].max()
@@ -580,11 +543,28 @@ class EnhancedDataOwner:
         print("-" * 50)
 
     def _send_json(self, sock, data):
-        """Send JSON data over socket with RTT measurement"""
+        """Send JSON data over socket with chunking for large payloads"""
         try:
             start_time = time.time()
             message = json.dumps(data, default=str).encode('utf-8')
-            sock.sendall(len(message).to_bytes(4, 'big') + message)
+            message_len = len(message)
+            
+            print(f"[DATA OWNER] Sending {message_len} bytes ({message_len / (1024*1024):.2f} MB)")
+            
+            # Use 8 bytes for length instead of 4 to support larger messages
+            sock.sendall(message_len.to_bytes(8, 'big'))
+            
+            # Send in chunks to avoid buffer overflow
+            chunk_size = 1024 * 1024  # 1MB chunks
+            offset = 0
+            while offset < message_len:
+                chunk = message[offset:offset + chunk_size]
+                sock.sendall(chunk)
+                offset += chunk_size
+                if offset % (10 * 1024 * 1024) == 0:  # Progress update every 10MB
+                    print(f"[DATA OWNER] Sent {offset / (1024*1024):.2f} MB / {message_len / (1024*1024):.2f} MB")
+            
+            print(f"[DATA OWNER] Successfully sent all data")
             
             rtt_time = time.time() - start_time
             operation_type = data.get('type', 'unknown')
@@ -595,32 +575,39 @@ class EnhancedDataOwner:
             raise
 
     def _receive_json(self, sock):
-        """Receive JSON data from socket with RTT measurement"""
+        """Receive JSON data from socket with support for large payloads"""
         try:
             start_time = time.time()
-            raw_len = sock.recv(4)
+            
+            # Use 8 bytes for length
+            raw_len = sock.recv(8)
             if not raw_len:
                 return None
             
             message_len = int.from_bytes(raw_len, 'big')
+            print(f"[DATA OWNER] Receiving {message_len} bytes ({message_len / (1024*1024):.2f} MB)")
+            
             chunks = []
             bytes_recd = 0
             
             while bytes_recd < message_len:
-                chunk = sock.recv(min(message_len - bytes_recd, 4096))
+                chunk = sock.recv(min(message_len - bytes_recd, 1024 * 1024))
                 if not chunk:
                     raise RuntimeError("Socket connection broken")
                 chunks.append(chunk)
                 bytes_recd += len(chunk)
+                if bytes_recd % (10 * 1024 * 1024) == 0:  # Progress update every 10MB
+                    print(f"[DATA OWNER] Received {bytes_recd / (1024*1024):.2f} MB / {message_len / (1024*1024):.2f} MB")
             
+            print(f"[DATA OWNER] Successfully received all data, parsing JSON...")
             data = json.loads(b''.join(chunks).decode('utf-8'))
+            print(f"[DATA OWNER] JSON parsed successfully")
             
             rtt_time = time.time() - start_time
             operation_type = data.get('type', 'unknown')
             self.performance_monitor.record_rtt(f"receive_{operation_type}", rtt_time)
             
             return data
-        
         except Exception as e:
             print(f"[DATA OWNER] Error receiving data: {e}")
             return None
@@ -650,7 +637,6 @@ class EnhancedDataOwner:
         if len(self.attribute_names) == 0:
             raise ValueError("No numeric attributes found in dataset!")
         
-        # Start performance monitoring
         self.performance_monitor.start_monitoring()
         
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -666,7 +652,6 @@ class EnhancedDataOwner:
             conn, addr = server_socket.accept()
             print(f"[DATA OWNER] Accepted connection from {addr}")
             
-            # STEP 1 & 2: Prepare and send initial data
             setup_start = time.time()
             print(f"\n[DATA OWNER] Preparing encrypted data and encrypted UDM...")
             encrypted_data, encrypted_udm, keys = outsource_data(self.dataset, self.attribute_names, m)
@@ -687,7 +672,6 @@ class EnhancedDataOwner:
             self._send_json(conn, initial_data)
             print("[DATA OWNER] Sent encrypted dataset and encrypted UDM to third party")
             
-            # Main communication loop
             iteration = 0
             final_cluster_assignments = None
             final_centroids_encrypted = None
@@ -700,7 +684,6 @@ class EnhancedDataOwner:
                 
                 iteration_start = time.time()
                 
-                # STEP 3: Help with minimum distance calculations
                 if request['type'] == 'minimum_distance_request':
                     print(f"[DATA OWNER] Processing minimum distance request")
                     encrypted_distances = request['encrypted_distances']
@@ -712,7 +695,6 @@ class EnhancedDataOwner:
                     }
                     self._send_json(conn, response)
                 
-                # STEP 4: Help with mean calculations
                 elif request['type'] == 'centroid_mean_request':
                     print(f"[DATA OWNER] Processing centroid mean calculation request")
                     cluster_sums = request['cluster_sums']
@@ -727,7 +709,6 @@ class EnhancedDataOwner:
                     }
                     self._send_json(conn, response)
                 
-                # STEP 4 & 5: Calculate and decrypt centroid shifts
                 elif request['type'] == 'centroid_difference_request':
                     iteration += 1
                     print(f"[DATA OWNER] Processing centroid difference request - Iteration {iteration}")
@@ -735,10 +716,7 @@ class EnhancedDataOwner:
                     current_centroids = request['current_centroids']
                     previous_centroids = request['previous_centroids']
                     
-                    # Calculate encrypted shift matrix
                     encrypted_shift_matrix = calculate_centroid_difference(current_centroids, previous_centroids)
-                    
-                    # Decrypt shift matrix for UDM update
                     decrypted_shifts = decrypt_shift_matrix(encrypted_shift_matrix, self.keys)
                     
                     response = {
@@ -749,51 +727,17 @@ class EnhancedDataOwner:
                     
                     self._send_json(conn, response)
                     
-                    # Record iteration processing time
                     iteration_time = time.time() - iteration_start
                     self.performance_monitor.record_iteration_time(iteration, iteration_time)
                     print(f"[DATA OWNER] Iteration {iteration} processed in {iteration_time:.3f} seconds")
-                
-                # OPTIONAL: Handle encrypted shift request (more secure alternative)
-                elif request['type'] == 'encrypted_shift_request':
-                    iteration += 1
-                    print(f"[DATA OWNER] Processing ENCRYPTED shift request - Iteration {iteration}")
-                    
-                    current_centroids = request['current_centroids']
-                    previous_centroids = request['previous_centroids']
-                    
-                    # Calculate encrypted shift matrix (stays encrypted)
-                    encrypted_shift_matrix = calculate_centroid_difference(current_centroids, previous_centroids)
-                    
-                    # Decrypt only for convergence checking
-                    max_shift = 0.0
-                    for cluster_shifts in encrypted_shift_matrix:
-                        for shift_enc in cluster_shifts:
-                            shift_val = abs(decrypt_value(shift_enc, self.keys))
-                            max_shift = max(max_shift, shift_val)
-                    
-                    response = {
-                        'type': 'encrypted_shift_matrix',
-                        'encrypted_shifts': encrypted_shift_matrix,
-                        'iteration': iteration,
-                        'max_shift': max_shift
-                    }
-                    
-                    self._send_json(conn, response)
-                    
-                    iteration_time = time.time() - iteration_start
-                    self.performance_monitor.record_iteration_time(iteration, iteration_time)
-                    print(f"[DATA OWNER] Iteration {iteration} processed in {iteration_time:.3f}s, max_shift: {max_shift:.6f}")
                 
                 elif request['type'] == 'final_results':
                     print(f"\n[DATA OWNER] Received final clustering results")
                     print(f"[DATA OWNER] Clustering completed in {request.get('iterations', 'unknown')} iterations")
                     
-                    # Store final results
                     final_cluster_assignments = request['cluster_assignments']
                     final_centroids_encrypted = request['final_centroids']
                     
-                    # Print final cluster assignments
                     print("\n--- Final Cluster Assignments ---")
                     for cluster_id, members in sorted(final_cluster_assignments.items()):
                         if isinstance(cluster_id, str):
@@ -805,7 +749,6 @@ class EnhancedDataOwner:
                         else:
                             print(f"Cluster {cluster_id}: {len(member_list)} members - {member_list}")
 
-                    # Decrypt final centroids
                     print(f"\n--- Final Centroids (Decrypted) ---")
                     print(f"Attributes: {self.attribute_names}")
                     
@@ -832,13 +775,10 @@ class EnhancedDataOwner:
             traceback.print_exc()
         
         finally:
-            # Stop performance monitoring
             self.performance_monitor.stop_monitoring()
             
-            # Get performance statistics
             perf_stats = self.performance_monitor.get_statistics()
             
-            # Print performance summary
             print(f"\n=== PERFORMANCE SUMMARY ===")
             print(f"Total Runtime: {perf_stats['total_runtime']:.2f} seconds")
             print(f"Total Iterations: {perf_stats['total_iterations']}")
@@ -852,13 +792,10 @@ class EnhancedDataOwner:
             print(f"  Minimum: {perf_stats['rtt_stats']['min_rtt']*1000:.2f} ms")
             print(f"  Total Operations: {perf_stats['rtt_stats']['total_operations']}")
             
-            # Save results to CSV files if we have final results
             if final_cluster_assignments and final_centroids_decrypted:
                 try:
-                    # Reverse scale the centroids back to original range
                     original_centroids = self._reverse_scale_centroids(final_centroids_decrypted)
                     
-                    # Save results using ORIGINAL dataset
                     save_results_to_csv(
                         self.original_dataset,
                         final_cluster_assignments, 
@@ -867,13 +804,10 @@ class EnhancedDataOwner:
                         output_file
                     )
                     
-                    # VISUALIZATION: Plot clusters using original data
                     print(f"\n[DATA OWNER] Creating cluster visualization...")
                     try:
-                        # Prepare data for visualization
                         original_numeric_data = self.original_dataset[self.attribute_names]
                         
-                        # Create labels array
                         labels = []
                         for record_idx in range(len(self.original_dataset)):
                             assigned_cluster = -1
@@ -885,15 +819,12 @@ class EnhancedDataOwner:
                         
                         labels = np.array(labels)
                         
-                        # Extract centroid values
                         centroid_values = []
                         for centroid_dict in original_centroids:
                             centroid_values.append([centroid_dict[attr] for attr in self.attribute_names])
                         
-                        # Generate plot filename
                         plot_filename = output_file.replace('.csv', '_cluster_plot.png')
                         
-                        # Plot clusters
                         plot_clusters(
                             data=original_numeric_data,
                             labels=labels, 
@@ -911,23 +842,19 @@ class EnhancedDataOwner:
                 except Exception as save_error:
                     print(f"[DATA OWNER] Error saving results: {save_error}")
             
-            # Save detailed performance data
             try:
-                # Save RTT measurements
                 if self.performance_monitor.rtt_measurements:
                     rtt_df = pd.DataFrame(self.performance_monitor.rtt_measurements)
                     rtt_filename = output_file.replace('.csv', '_rtt_details.csv')
                     rtt_df.to_csv(rtt_filename, index=False)
                     print(f"[DATA OWNER] RTT details saved to {rtt_filename}")
                 
-                # Save CPU measurements
                 if self.performance_monitor.cpu_samples:
                     cpu_df = pd.DataFrame(self.performance_monitor.cpu_samples)
                     cpu_filename = output_file.replace('.csv', '_cpu_details.csv')
                     cpu_df.to_csv(cpu_filename, index=False)
                     print(f"[DATA OWNER] CPU usage details saved to {cpu_filename}")
                 
-                # Save iteration times
                 if self.performance_monitor.iteration_times:
                     iter_df = pd.DataFrame(self.performance_monitor.iteration_times)
                     iter_filename = output_file.replace('.csv', '_iteration_times.csv')
@@ -948,13 +875,11 @@ if __name__ == "__main__":
     print("=== Data Owner: Secure K-Means with Performance Monitoring ===")
     print("=" * 80)
     
-    # Configuration
-    K_CLUSTERS = 4  # Number of clusters
-    ENCRYPTION_DIMENSION = 4  # Liu's scheme parameter m
+    K_CLUSTERS = 4
+    ENCRYPTION_DIMENSION = 4
     
-    # Dataset and output configuration
-    DATASET_PATH = '500.csv'  # Input CSV file
-    OUTPUT_FILE = 'clustering_results.csv'  # Output CSV file
+    DATASET_PATH = '500.csv'
+    OUTPUT_FILE = 'clustering_results.csv'
     
     try:
         owner = EnhancedDataOwner(dataset_path=DATASET_PATH)
